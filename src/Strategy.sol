@@ -5,7 +5,7 @@ pragma solidity ^0.8.12;
 pragma experimental ABIEncoderV2;
 
 // These are the core Yearn libraries
-import {BaseStrategy, StrategyParams} from "@yearnvaults/contracts/BaseStrategy.sol";
+import {BaseStrategyInitializable, StrategyParams} from "@yearnvaults/contracts/BaseStrategy.sol";
 
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -22,7 +22,7 @@ import {DataTypes} from "./types/DataTypes.sol";
  * @notice DAI Yearn Strategy
  * @author Sturdy
  **/
-contract Strategy is BaseStrategy {
+contract Strategy is BaseStrategyInitializable {
     using SafeERC20 for IERC20;
     using Address for address;
 
@@ -30,7 +30,7 @@ contract Strategy is BaseStrategy {
         ILendingPoolAddressesProvider(0xb7499a92fc36e9053a4324aFfae59d333635D9c3);
 
     // solhint-disable-next-line no-empty-blocks
-    constructor(address _vault) BaseStrategy(_vault) {
+    constructor(address _vault) BaseStrategyInitializable(_vault) {
         // You can set these parameters on deployment to whatever you want
         // maxReportDelay = 6300;
         // profitFactor = 100;
@@ -41,7 +41,7 @@ contract Strategy is BaseStrategy {
 
     function name() external pure override returns (string memory) {
         // Add your own name here, suggestion e.g. "StrategyCreamYFI"
-        return "StrategySturdyDAI";
+        return "StrategySturdyStables";
     }
 
     function estimatedTotalAssets() public view override returns (uint256) {

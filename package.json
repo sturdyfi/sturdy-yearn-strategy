@@ -14,4 +14,4 @@
         "lint": "solhint 'src/**/*.sol'",
         "lint:fix": "solhint --fix 'src/**/*.sol'"
     }
-  }
+}
