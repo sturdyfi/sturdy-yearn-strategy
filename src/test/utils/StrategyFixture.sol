@@ -128,7 +128,7 @@ contract StrategyFixture is ExtendedTest {
 
     // Deploys a strategy
     function deployStrategy(address _vault) public returns (address) {
-        Strategy _strategy = new Strategy(_vault);
+        Strategy _strategy = new Strategy(_vault, "StategySturdyUSDC");
 
         return address(_strategy);
     }

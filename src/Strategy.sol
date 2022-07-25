@@ -5,7 +5,7 @@ pragma solidity ^0.8.12;
 pragma experimental ABIEncoderV2;
 
 // These are the core Yearn libraries
-import {BaseStrategyInitializable, StrategyParams} from "@yearnvaults/contracts/BaseStrategy.sol";
+import {BaseStrategy, StrategyParams} from "@yearnvaults/contracts/BaseStrategy.sol";
 
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -22,33 +22,81 @@ import {DataTypes} from "./types/DataTypes.sol";
  * @notice DAI Yearn Strategy
  * @author Sturdy
  **/
-contract Strategy is BaseStrategyInitializable {
+contract Strategy is BaseStrategy {
     using SafeERC20 for IERC20;
     using Address for address;
 
     ILendingPoolAddressesProvider private constant PROVIDER = 
         ILendingPoolAddressesProvider(0xb7499a92fc36e9053a4324aFfae59d333635D9c3);
+    
+    string private lenderName;
+    
+    event Cloned(address indexed clone);
 
     // solhint-disable-next-line no-empty-blocks
-    constructor(address _vault) BaseStrategyInitializable(_vault) {
+    constructor(address _vault, string memory _name) BaseStrategy(_vault) {
+        lenderName = _name;
         // You can set these parameters on deployment to whatever you want
         // maxReportDelay = 6300;
         // profitFactor = 100;
         // debtThreshold = 0;
     }
 
+    function clone(address _vault, string memory _name) external returns (address) {
+        return this.clone(_vault, msg.sender, msg.sender, msg.sender, _name);
+    }
+
+    function clone(
+        address _vault,
+        address _strategist,
+        address _rewards,
+        address _keeper,
+        string memory _name
+    ) external returns (address newStrategy) {
+        // Copied from https://github.com/optionality/clone-factory/blob/master/contracts/CloneFactory.sol
+        bytes20 addressBytes = bytes20(address(this));
+
+        assembly {
+            // EIP-1167 bytecode
+            let clone_code := mload(0x40)
+            mstore(clone_code, 0x3d602d80600a3d3981f3363d3d373d3d3d363d73000000000000000000000000)
+            mstore(add(clone_code, 0x14), addressBytes)
+            mstore(add(clone_code, 0x28), 0x5af43d82803e903d91602b57fd5bf30000000000000000000000000000000000)
+            newStrategy := create(0, clone_code, 0x37)
+        }
+
+        Strategy(newStrategy).initialize(_vault, _strategist, _rewards, _keeper, _name);
+
+        emit Cloned(newStrategy);
+    }
+
+    function initialize(
+        address _vault,
+        address _strategist,
+        address _rewards,
+        address _keeper,
+        string memory _name
+    ) external {
+        lenderName = _name;
+        _initialize(_vault, _strategist, _rewards, _keeper);
+    }
+
+    function balanceOfWant() public view returns (uint256) {
+        return want.balanceOf(address(this));
+    }
+
     // ******** OVERRIDE THESE METHODS FROM BASE CONTRACT ************
 
-    function name() external pure override returns (string memory) {
-        // Add your own name here, suggestion e.g. "StrategyCreamYFI"
-        return "StrategySturdyStables";
+    function name() external view override returns (string memory) {
+        // Add your own name here, suggestion e.g. "StrategySturdyUSDC"
+        return lenderName;
     }
 
     function estimatedTotalAssets() public view override returns (uint256) {
         DataTypes.ReserveData memory reserve = 
             ILendingPool(PROVIDER.getLendingPool()).getReserveData(address(want));
         
-        return want.balanceOf(address(this)) + IERC20(reserve.aTokenAddress).balanceOf(address(this));
+        return balanceOfWant() + IERC20(reserve.aTokenAddress).balanceOf(address(this));
     }
 
     function prepareReturn(uint256 _debtOutstanding)
@@ -64,13 +112,13 @@ contract Strategy is BaseStrategyInitializable {
         // NOTE: Should try to free up at least `_debtOutstanding` of underlying position
 
         if (_debtOutstanding == 0)
-            return (_profit, _loss, _debtPayment);
+            return (0, 0, _debtPayment);
 
         // Withdraw `want` token from Sturdy pool
-        _removePosition();
+        _removePosition(_debtOutstanding);
 
         _debtPayment = _debtOutstanding;
-        uint256 availableWants = want.balanceOf(address(this));
+        uint256 availableWants = balanceOfWant();
         if (availableWants >= _debtOutstanding) {
             unchecked {
                 _profit = availableWants - _debtOutstanding;   
@@ -86,7 +134,7 @@ contract Strategy is BaseStrategyInitializable {
     function adjustPosition(uint256 _debtOutstanding) internal override {
         // NOTE: Try to adjust positions so that `_debtOutstanding` can be freed up on *next* harvest (not immediately)
 
-        uint256 availableWants = want.balanceOf(address(this));
+        uint256 availableWants = balanceOfWant();
         if(availableWants <= _debtOutstanding) {
             return;
         }
@@ -108,9 +156,9 @@ contract Strategy is BaseStrategyInitializable {
         // NOTE: Maintain invariant `_liquidatedAmount + _loss <= _amountNeeded`
 
         // Withdraw `want` token from Sturdy pool
-        _removePosition();
+        _removePosition(_amountNeeded);
 
-        uint256 totalAssets = want.balanceOf(address(this));
+        uint256 totalAssets = balanceOfWant();
         if (_amountNeeded > totalAssets) {
             _liquidatedAmount = totalAssets;
             unchecked {
@@ -123,16 +171,16 @@ contract Strategy is BaseStrategyInitializable {
 
     function liquidateAllPositions() internal override returns (uint256) {
         // Withdraw `want` token from Sturdy pool
-        _removePosition();
+        _removePosition(type(uint256).max);
 
-        return want.balanceOf(address(this));
+        return balanceOfWant();
     }
 
     function prepareMigration(address _newStrategy) internal override {
         // NOTE: `migrate` will automatically forward all `want` in this strategy to the new one
 
         // Withdraw `want` token from Sturdy pool
-        _removePosition();
+        _removePosition(type(uint256).max);
     }
 
     // Override this to add all tokens/tokenized positions this contract manages
@@ -189,9 +237,15 @@ contract Strategy is BaseStrategyInitializable {
     /**
      * @dev withdraw `want` token from sturdy pool
      **/
-    function _removePosition() internal {
-        ILendingPool(PROVIDER.getLendingPool())
-            .withdraw(address(want), type(uint256).max, address(this));
+    function _removePosition(uint256 amount) internal {
+        DataTypes.ReserveData memory reserve = 
+            ILendingPool(PROVIDER.getLendingPool()).getReserveData(address(want));
+        uint256 wantBalance = IERC20(reserve.aTokenAddress).balanceOf(address(this));
+        ILendingPool(PROVIDER.getLendingPool()).withdraw(
+            address(want), 
+            wantBalance > amount ? amount : wantBalance, 
+            address(this)
+        );
     }
 
     /**
